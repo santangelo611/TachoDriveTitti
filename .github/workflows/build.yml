@@ -35,9 +35,9 @@ jobs:
       - name: Set permissions for Gradle
         run: chmod +x android/gradlew
 
-      - name: Add background location permission
+     - name: Add location permissions
         run: |
-          sed -i 's|</manifest>|<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>\n<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n</manifest>|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|</manifest>|<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\n<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>\n<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n</manifest>|' android/app/src/main/AndroidManifest.xml
 
       - name: Build APK
         run: |
