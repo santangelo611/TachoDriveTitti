@@ -1,0 +1,10 @@
+{
+  "name": "TahoDrive",
+  "short_name": "TahoDrive",
+  "description": "Tahograf digital pentru soferi",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#f0a500",
+  "orientation": "portrait"
+}
