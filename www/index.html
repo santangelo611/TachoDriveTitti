@@ -1,0 +1,1667 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f0a500">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<title>TahoDrive</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script>
+// Capacitor GPS wrapper — funcționează în APK și în browser
+const CapGPS = {
+  async startWatch(callback, errorCallback, options) {
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+      // Mod nativ APK — folosim Capacitor Geolocation
+      try {
+        const { Geolocation } = window.Capacitor.Plugins;
+        await Geolocation.requestPermissions({ permissions: ['location'] });
+        const id = await Geolocation.watchPosition(
+          { enableHighAccuracy: true, timeout: 30000 },
+          (pos, err) => {
+            if (err) { errorCallback && errorCallback(err); return; }
+            callback({
+              coords: {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                accuracy: pos.coords.accuracy,
+                speed: pos.coords.speed
+              }
+            });
+          }
+        );
+        return { type: 'capacitor', id };
+      } catch(e) { errorCallback && errorCallback(e); }
+    } else {
+      // Mod browser — folosim navigator.geolocation
+      if (!navigator.geolocation) { errorCallback && errorCallback(new Error('GPS indisponibil')); return; }
+      const id = navigator.geolocation.watchPosition(callback, errorCallback, options);
+      return { type: 'browser', id };
+    }
+  },
+  clearWatch(watch) {
+    if (!watch) return;
+    if (watch.type === 'capacitor') {
+      try { const { Geolocation } = window.Capacitor.Plugins; Geolocation.clearWatch({ id: watch.id }); } catch(e) {}
+    } else {
+      navigator.geolocation.clearWatch(watch.id);
+    }
+  }
+};
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root {
+  --bg:#0d1117; --surface:#161b22; --surface2:#21262d; --border:#30363d;
+  --accent:#f0a500; --accent2:#e05a1a; --green:#2ea043; --red:#da3633;
+  --blue:#388bfd; --purple:#a360f3; --teal:#1abc9c;
+  --text:#e6edf3; --text-muted:#8b949e; --text-dim:#484f58;
+  --radius:10px; color-scheme:dark;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.5;min-height:100%;}
+@media(prefers-color-scheme:light){:root{--bg:#f0f2f5;--surface:#fff;--surface2:#f0f2f5;--border:#d0d7de;--text:#1f2328;--text-muted:#636c76;--text-dim:#adb5bd;}}
+
+/* HEADER */
+.header{background:var(--surface);border-bottom:2px solid var(--accent);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:env(safe-area-inset-top,0px);z-index:100;}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:200;background:var(--surface);}
+.logo{display:flex;align-items:center;gap:10px;}
+.logo-icon{width:34px;height:34px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px;}
+.logo-text{font-size:15px;font-weight:700;}
+.logo-sub{font-size:11px;color:var(--text-muted);}
+.hdr-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;}
+.hdr-masina{font-size:12px;font-weight:600;color:var(--accent);}
+.hdr-firma{font-size:11px;color:var(--text-muted);}
+
+/* TABS */
+.tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none;}
+.tabs::-webkit-scrollbar{display:none;}
+.tab{padding:9px 12px;font-size:12px;font-weight:500;color:var(--text-muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:color .15s,border-color .15s;flex-shrink:0;}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+/* MAIN */
+.main{padding:14px;max-width:540px;margin:0 auto;}
+.page{display:none;}.page.active{display:block;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
+.b-condus{background:rgba(240,165,0,.15);color:var(--accent);border:1px solid rgba(240,165,0,.3);}
+.b-pauza{background:rgba(56,139,253,.15);color:var(--blue);border:1px solid rgba(56,139,253,.3);}
+.b-odihna{background:rgba(46,160,67,.15);color:var(--green);border:1px solid rgba(46,160,67,.3);}
+.b-disponibil{background:rgba(56,139,253,.08);color:#aed6f1;border:1px solid rgba(56,139,253,.2);}
+.b-descarcare{background:rgba(224,90,26,.15);color:var(--accent2);border:1px solid rgba(224,90,26,.3);}
+.b-incarcare{background:rgba(163,96,243,.15);color:var(--purple);border:1px solid rgba(163,96,243,.3);}
+.b-alimentare{background:rgba(26,188,156,.15);color:var(--teal);border:1px solid rgba(26,188,156,.3);}
+.b-servicii{background:rgba(139,148,158,.15);color:var(--text-muted);border:1px solid var(--border);}
+.b-liber{background:rgba(46,160,67,.08);color:var(--green);border:1px solid rgba(46,160,67,.2);}
+.b-liber2{background:rgba(139,148,158,.15);color:var(--text-muted);border:1px solid var(--border);}
+
+/* BUTTONS */
+.btn{padding:11px 8px;border:none;border-radius:var(--radius);font-size:12px;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s;display:flex;align-items:center;justify-content:center;gap:5px;}
+.btn:active{transform:scale(.97);}.btn:disabled{opacity:.35;cursor:not-allowed;}
+.btn-g{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:7px;}
+.btn-full{width:100%;}
+.c-condus{background:var(--accent);color:#000;}
+.c-pauza{background:var(--blue);color:#fff;}
+.c-odihna{background:var(--green);color:#fff;}
+.c-disponibil{background:#1a5276;color:#aed6f1;border:1px solid #2e86c1;}
+.c-descarcare{background:var(--accent2);color:#fff;}
+.c-incarcare{background:#6c3483;color:#d7bde2;border:1px solid var(--purple);}
+.c-alimentare{background:#0e6655;color:#a2d9ce;border:1px solid var(--teal);}
+.c-servicii{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.c-stop{background:var(--red);color:#fff;}
+.c-sec{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.c-ok{background:var(--green);color:#fff;}
+.c-warn{background:none;border:1px solid var(--red);color:var(--red);}
+
+/* TIMER */
+.big-timer{font-size:46px;font-weight:700;letter-spacing:2px;text-align:center;color:var(--accent);font-variant-numeric:tabular-nums;margin:6px 0;}
+.timer-lbl{text-align:center;font-size:12px;color:var(--text-muted);margin-bottom:14px;}
+
+/* TOTALS GRID */
+.tot-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px;}
+.tot-box{background:var(--surface2);border-radius:8px;padding:9px;text-align:center;}
+.tot-val{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;}
+.tot-lbl{font-size:10px;color:var(--text-muted);margin-top:1px;}
+
+/* INFO ROWS */
+.info-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.info-row:last-child{border-bottom:none;}
+.info-lbl{color:var(--text-muted);}
+.sec-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:11px;}
+
+/* INPUT */
+.inp{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-size:14px;font-family:inherit;width:100%;}
+.inp:focus{outline:none;border-color:var(--accent);}
+.inp::placeholder{color:var(--text-dim);}
+select.inp{cursor:pointer;}
+
+/* ALERTS */
+.alert{padding:9px 13px;border-radius:8px;font-size:13px;margin-bottom:9px;display:none;}
+.alert.show{display:block;}
+.alert-warn{background:rgba(240,165,0,.1);color:var(--accent);border:1px solid rgba(240,165,0,.3);}
+.alert-info{background:rgba(56,139,253,.1);color:var(--blue);border:1px solid rgba(56,139,253,.3);}
+.alert-ok{background:rgba(46,160,67,.1);color:var(--green);border:1px solid rgba(46,160,67,.3);}
+
+/* MAP */
+.map-wrap{height:260px;border-radius:8px;overflow:hidden;border:1px solid var(--border);position:relative;margin-bottom:14px;}
+.map-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;color:var(--text-muted);font-size:13px;z-index:5;pointer-events:none;background:var(--surface2);}
+#leaflet-map{height:100%;width:100%;}
+
+/* KM BOXES */
+.km-row{display:flex;gap:7px;margin-top:9px;}
+.km-box{flex:1;background:var(--surface2);border-radius:8px;padding:9px;text-align:center;}
+.km-val{font-size:20px;font-weight:700;color:var(--accent);}
+.km-lbl{font-size:10px;color:var(--text-muted);}
+
+/* TEXTAREA */
+.note-area{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px;color:var(--text);font-size:14px;width:100%;resize:vertical;min-height:85px;font-family:inherit;margin-bottom:7px;}
+.note-area:focus{outline:none;border-color:var(--accent);}
+
+/* HISTORIC */
+.day-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:9px;overflow:hidden;}
+.day-hdr{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer;}
+.day-body{padding:11px 14px;}
+.seg{display:flex;align-items:flex-start;gap:9px;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.seg:last-child{border-bottom:none;}
+.seg-ico{font-size:15px;width:19px;text-align:center;flex-shrink:0;margin-top:1px;}
+.seg-dur{font-variant-numeric:tabular-nums;color:var(--text-muted);font-size:12px;white-space:nowrap;}
+
+/* SALARY */
+.sal-card{background:linear-gradient(135deg,rgba(46,160,67,.15),rgba(46,160,67,.05));border:1px solid rgba(46,160,67,.3);border-radius:var(--radius);padding:16px;text-align:center;margin-bottom:14px;}
+.sal-amt{font-size:40px;font-weight:700;color:var(--green);}
+
+/* MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:400;display:none;align-items:flex-end;justify-content:center;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--surface);border-top-left-radius:16px;border-top-right-radius:16px;width:100%;max-width:540px;max-height:85vh;overflow-y:auto;border-top:1px solid var(--border);}
+.modal-hdr{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--surface);z-index:1;}
+.modal-body{padding:16px;}
+
+/* RECOVERY */
+.recovery{background:rgba(56,139,253,.1);border:1px solid rgba(56,139,253,.3);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;display:none;}
+.recovery.show{display:block;}
+
+/* BG BANNER */
+.bg-banner{background:linear-gradient(90deg,rgba(46,160,67,.2),rgba(46,160,67,.05));border-bottom:1px solid rgba(46,160,67,.3);padding:6px 14px;font-size:12px;color:var(--green);text-align:center;display:none;}
+.bg-banner.show{display:block;}
+
+/* GPS DOT */
+.gps-dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);}
+.gps-dot.on{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 1.5s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+/* EXPORT SUMMARY */
+.exp-sum{background:#0d1117;color:#f0a500;padding:14px;border-radius:8px;margin-bottom:14px;}
+.exp-sum-grid{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}
+.exp-sum-box{background:rgba(255,255,255,.08);border-radius:6px;padding:6px 10px;text-align:center;min-width:70px;}
+.exp-sum-val{font-size:17px;font-weight:700;color:#fff;}
+.exp-sum-lbl{font-size:10px;color:#8b949e;}
+.exp-sum-footer{border-top:1px solid rgba(255,255,255,.1);padding-top:10px;display:flex;flex-wrap:wrap;gap:12px;font-size:12px;}
+
+/* AUTO SWITCH TOGGLE */
+.toggle-wrap{position:relative;display:inline-block;width:46px;height:26px;flex-shrink:0;}
+.toggle-wrap input{opacity:0;width:0;height:0;}
+.toggle-track{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:13px;transition:.3s;}
+.toggle-track.on{background:var(--teal);}
+.toggle-thumb{position:absolute;height:20px;width:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s;}
+.toggle-thumb.on{transform:translateX(20px);}
+
+::-webkit-scrollbar{width:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+</style>
+<script src="capacitor.js" onerror="console.log('No Capacitor')"></script>
+</head>
+<body>
+
+<div class="bg-banner" id="bg-banner">🔒 Înregistrare activă — poți folosi alte aplicații</div>
+
+<div class="header">
+  <div class="logo">
+    <div class="logo-icon">🚛</div>
+    <div>
+      <div class="logo-text">TahoDrive</div>
+      <div class="logo-sub" id="hdr-date">—</div>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <div class="hdr-masina" id="hdr-masina">— Mașină —</div>
+    <div class="hdr-firma" id="hdr-firma">— Firmă —</div>
+    <div style="font-size:10px;color:var(--text-muted);" id="hdr-sofer">— Șofer —</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showPage('dashboard')">🕹️ Activitate</div>
+  <div class="tab" onclick="showPage('traseu')">🗺️ Traseu</div>
+  <div class="tab" onclick="showPage('alimentare')">⛽ Combustibil</div>
+  <div class="tab" onclick="showPage('salariu')">💶 Salariu</div>
+  <div class="tab" onclick="showPage('note')">📝 Note</div>
+  <div class="tab" onclick="showPage('setari')">⚙️ Setări</div>
+  <div class="tab" onclick="showPage('istoric')">📋 Istoric</div>
+  <div class="tab" onclick="showPage('export')">📄 Export</div>
+</div>
+
+<div class="main">
+
+<!-- ===== DASHBOARD ===== -->
+<div class="page active" id="page-dashboard">
+  <div class="recovery" id="recovery-banner">
+    <strong style="color:var(--blue);">⏱️ Timp recuperat</strong>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" id="recovery-text">—</div>
+    <button onclick="document.getElementById('recovery-banner').classList.remove('show')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;margin-top:6px;">✕ Închide</button>
+  </div>
+
+  <div id="zile-libere-banner" class="alert alert-ok" style="display:none;">
+    <strong>🗓️ Zile fără activitate detectate:</strong>
+    <div id="zile-libere-text" style="margin:6px 0;font-size:12px;"></div>
+    <div style="display:flex;gap:7px;margin-top:8px;">
+      <button class="btn c-odihna" onclick="marcheazaZile('odihna')" style="flex:1;font-size:11px;">🛌 Odihnă</button>
+      <button class="btn c-sec" onclick="marcheazaZile('liber')" style="flex:1;font-size:11px;">🏖️ Zi liberă</button>
+      <button onclick="document.getElementById('zile-libere-banner').style.display='none'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">✕</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <span style="font-size:12px;color:var(--text-muted);">Status curent</span>
+      <span class="badge b-liber2" id="status-badge">⚪ Liber</span>
+    </div>
+    <div class="big-timer" id="main-timer">00:00:00</div>
+    <div class="timer-lbl" id="timer-lbl">Nicio activitate activă</div>
+
+    <div class="btn-g">
+      <button class="btn c-condus" onclick="startAct('condus')">🚛 Conduc</button>
+      <button class="btn c-pauza" onclick="startAct('pauza')">☕ Pauză</button>
+      <button class="btn c-odihna" onclick="startAct('odihna')">🛌 Odihnă</button>
+      <button class="btn c-disponibil" onclick="startAct('disponibil')">🕐 Disponibil</button>
+      <button class="btn c-descarcare" onclick="startAct('descarcare')">🏗️ Descărcare</button>
+      <button class="btn c-incarcare" onclick="startAct('incarcare')">📦 Încărcare</button>
+      <button class="btn c-alimentare" onclick="startAct('alimentare')">⛽ Alimentare</button>
+      <button class="btn c-servicii" onclick="startAct('servicii')">🔧 Alte servicii</button>
+    </div>
+    <button class="btn c-stop btn-full" id="btn-stop" onclick="stopAct()" disabled>⏹ Stop activitate</button>
+
+    <div class="tot-grid">
+      <div class="tot-box"><div class="tot-val" id="t-condus" style="color:var(--accent);">0:00</div><div class="tot-lbl">🚛 Condus</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-pauza" style="color:var(--blue);">0:00</div><div class="tot-lbl">☕ Pauze</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-odih" style="color:var(--green);">0:00</div><div class="tot-lbl">🛌 Odihnă</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-disp" style="color:#aed6f1;">0:00</div><div class="tot-lbl">🕐 Disponibil</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-desc" style="color:var(--accent2);">0:00</div><div class="tot-lbl">🏗️ Descărcare</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-inc" style="color:var(--purple);">0:00</div><div class="tot-lbl">📦 Încărcare</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-alim" style="color:var(--teal);">0:00</div><div class="tot-lbl">⛽ Alimentare</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-serv" style="color:var(--text-muted);">0:00</div><div class="tot-lbl">🔧 Servicii</div></div>
+      <div class="tot-box"><div class="tot-val" id="t-lucrat" style="color:var(--green);font-size:16px;">0:00</div><div class="tot-lbl">✅ Lucrat</div></div>
+    </div>
+  </div>
+
+  <div class="alert alert-warn" id="alert-condus">⚠️ Ai condus <strong id="alert-h"></strong>h — reglementările UE recomandă pauză după 4.5h</div>
+  <div class="alert alert-warn" id="alert-tura">⚠️ Tura activă depășește 10 ore</div>
+
+  <div class="card" style="padding:13px 15px;">
+    <div class="sec-title">Tura curentă</div>
+    <div class="info-row"><span class="info-lbl">Pornit la</span><span id="tura-start">—</span></div>
+    <div class="info-row"><span class="info-lbl">Total tură</span><span id="tura-total">—</span></div>
+    <div class="info-row"><span class="info-lbl">Km azi</span><span id="km-azi">0 km</span></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+    <button class="btn c-odihna" onclick="marcheazaAziLibera()" style="font-size:11px;">🛌 Zi liberă / Odihnă</button>
+    <button class="btn c-sec" onclick="openEdit()">✏️ Editează activități</button>
+  </div>
+  <div class="card" style="padding:12px 14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-size:13px;font-weight:600;">🚗 Auto-detectare condus</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" id="as-dash-status">Dezactivat</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:12px;color:var(--text-muted);" id="as-dash-speed">— km/h</span>
+        <div class="toggle-wrap" onclick="toggleAutoSwitch();updateAsDashStatus();">
+          <div class="toggle-track" id="as-track"></div>
+          <div class="toggle-thumb" id="as-thumb"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TRASEU ===== -->
+<div class="page" id="page-traseu">
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+      <span style="font-weight:600;font-size:14px;">📍 GPS Live</span>
+      <span class="gps-dot" id="gps-dot"></span>
+    </div>
+    <div class="map-wrap">
+      <div class="map-overlay" id="map-overlay"><div style="font-size:26px;">🗺️</div><div>Pornește GPS</div></div>
+      <div id="leaflet-map"></div>
+    </div>
+    <div style="display:flex;gap:7px;">
+      <button class="btn c-condus" style="flex:1;" id="btn-gps" onclick="toggleGPS()">📍 Pornire GPS</button>
+      <button class="btn c-sec" style="flex:1;" onclick="clearGPS()">🗑️ Șterge traseu</button>
+    </div>
+    <div id="gps-status" style="margin-top:7px;font-size:12px;color:var(--text-muted);text-align:center;">GPS inactiv</div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">🛣️ Kilometri parcurși</div>
+    <div class="km-row">
+      <div class="km-box"><div class="km-val" id="km-gps">0.0</div><div class="km-lbl">km GPS</div></div>
+      <div class="km-box"><div class="km-val" id="km-man">0.0</div><div class="km-lbl">km manual</div></div>
+      <div class="km-box"><div class="km-val" id="km-tot">0.0</div><div class="km-lbl">total km</div></div>
+    </div>
+    <div style="margin-top:12px;">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">📊 Calcul din bord (recomandat):</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Km bord START</div>
+          <input class="inp" type="number" id="km-start" placeholder="ex: 125000">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Km bord FINAL</div>
+          <input class="inp" type="number" id="km-end" placeholder="ex: 125180">
+        </div>
+      </div>
+      <button class="btn c-ok btn-full" onclick="calcKmBord()" style="margin-bottom:10px;">🧮 Calculează km parcurși</button>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px;">Sau introdu km direct:</div>
+      <div style="display:flex;gap:7px;">
+        <input class="inp" type="number" id="km-direct" placeholder="ex: 180" style="flex:1;">
+        <button class="btn c-sec" onclick="saveKmDirect()" style="padding:9px 14px;">💾</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== COMBUSTIBIL ===== -->
+<div class="page" id="page-alimentare">
+  <div class="card">
+    <div class="sec-title">⛽ Înregistrare alimentare</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:10px;">
+      <div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Litri</div>
+        <input class="inp" type="number" id="alim-litri" placeholder="ex: 450" step="0.1">
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Preț/litru (RON)</div>
+        <input class="inp" type="number" id="alim-pret" placeholder="ex: 7.20" step="0.01">
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Stație</div>
+      <input class="inp" type="text" id="alim-statie" placeholder="ex: MOL București Nord">
+    </div>
+    <button class="btn c-alimentare btn-full" onclick="saveAlim()">⛽ Adaugă alimentare</button>
+    <div id="alim-status" style="margin-top:7px;font-size:12px;color:var(--teal);text-align:center;min-height:16px;"></div>
+  </div>
+  <div class="card">
+    <div class="sec-title">Total azi</div>
+    <div class="km-row">
+      <div class="km-box"><div class="km-val" id="alim-tot-l" style="color:var(--teal);">0.0</div><div class="km-lbl">litri</div></div>
+      <div class="km-box"><div class="km-val" id="alim-tot-r" style="color:var(--accent);font-size:18px;">0.00</div><div class="km-lbl">RON</div></div>
+      <div class="km-box"><div class="km-val" id="alim-tot-n" style="color:var(--text-muted);">0</div><div class="km-lbl">alimentări</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="sec-title">Alimentări azi</div>
+    <div id="alim-list"><div style="color:var(--text-muted);font-size:13px;">Nicio alimentare.</div></div>
+  </div>
+</div>
+
+<!-- ===== SALARIU ===== -->
+<div class="page" id="page-salariu">
+  <div class="sal-card">
+    <div style="font-size:12px;color:var(--text-muted);">Total de încasat azi</div>
+    <div class="sal-amt" id="sal-total">€ 0.00</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" id="sal-formula">—</div>
+  </div>
+  <div class="card">
+    <div class="sec-title">Configurare tarif</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">Tarif orar (€/oră)</div>
+    <div style="display:flex;gap:7px;margin-bottom:8px;">
+      <input class="inp" type="number" id="tarif-inp" placeholder="ex: 12.50" step="0.5" style="flex:1;">
+      <button class="btn c-ok" onclick="saveTarif()" style="padding:9px 14px;">💾</button>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);">Tarif curent: <strong id="tarif-afis" style="color:var(--accent);">nesetat</strong></div>
+  </div>
+  <div class="card">
+    <div class="sec-title">Detalii calcul</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-bottom:12px;">
+      <div class="tot-box"><div class="tot-val" id="sal-lucrate" style="color:var(--green);">0:00</div><div class="tot-lbl">Ore lucrate</div></div>
+      <div class="tot-box"><div class="tot-val" id="sal-pauze" style="color:var(--blue);">0:00</div><div class="tot-lbl">Pauze</div></div>
+      <div class="tot-box"><div class="tot-val" id="sal-platite" style="color:var(--accent);">0:00</div><div class="tot-lbl">Ore plătite</div></div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:10px;font-size:12px;color:var(--text-muted);">
+      <strong style="color:var(--text);">Formula:</strong><br>
+      Plătite = (Condus+Disponibil+Descărcare+Încărcare+Alimentare+Servicii) − Pauze<br>
+      <span style="color:var(--text-dim);">Odihnă și Pauze = nepaid.</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="sec-title">Calcul săptămânal</div>
+    <div id="sal-sapt" style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">Apasă pentru a calcula.</div>
+    <button class="btn c-sec btn-full" onclick="calcSapt()">📊 Calculează săptămâna</button>
+  </div>
+</div>
+
+<!-- ===== NOTE ===== -->
+<div class="page" id="page-note">
+  <div class="card">
+    <div class="sec-title">📝 Notă pentru azi</div>
+    <textarea class="note-area" id="nota-txt" placeholder="Ex: Livrat la București, trafic intens..."></textarea>
+    <div style="display:flex;gap:7px;">
+      <button class="btn c-condus" style="flex:1;" onclick="saveNota()">💾 Salvează</button>
+      <button class="btn c-sec" onclick="clearNota()" style="padding:11px;">🗑️</button>
+    </div>
+    <div id="nota-status" style="margin-top:7px;font-size:12px;color:var(--text-muted);text-align:center;"></div>
+  </div>
+  <div class="card" id="nota-preview" style="display:none;">
+    <div class="sec-title">Nota salvată</div>
+    <div id="nota-saved" style="font-size:13px;white-space:pre-wrap;"></div>
+  </div>
+</div>
+
+<!-- ===== SETĂRI ===== -->
+<div class="page" id="page-setari">
+  <div class="card">
+    <div class="sec-title">Profil conducător</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Nume șofer</div>
+    <input class="inp" type="text" id="set-sofer" placeholder="ex: Ion Popescu" style="margin-bottom:10px;">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Nume firmă</div>
+    <input class="inp" type="text" id="set-firma" placeholder="ex: Transport SRL" style="margin-bottom:10px;">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Număr mașină</div>
+    <input class="inp" type="text" id="set-masina" placeholder="ex: B 123 XYZ" style="margin-bottom:10px;">
+    <button class="btn c-condus btn-full" onclick="saveSetari()">💾 Salvează</button>
+    <div style="margin-top:10px;padding:10px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text-muted);">
+      Șofer: <strong id="set-sofer-afis" style="color:var(--accent);">—</strong><br>
+      Firmă: <strong id="set-firma-afis" style="color:var(--accent);">—</strong><br>
+      Mașină: <strong id="set-masina-afis" style="color:var(--accent);">—</strong>
+    </div>
+  </div>
+
+  <div class="card" id="masini-card" style="display:none;">
+    <div class="sec-title">Mașini folosite</div>
+    <div id="masini-list"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">🚗 Auto-detectare condus (GPS)</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div>
+        <div style="font-size:13px;font-weight:600;">Comutare automată la „Conduc"</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Se activează când depășești viteza setată</div>
+      </div>
+      <div class="toggle-wrap" onclick="toggleAutoSwitch()">
+        <div class="toggle-track" id="as-track"></div>
+        <div class="toggle-thumb" id="as-thumb"></div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Viteză minimă (km/h)</div>
+    <input class="inp" type="number" id="as-speed" placeholder="10" style="margin-bottom:10px;">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:5px;">Delay oprire la 0 km/h (secunde)</div>
+    <input class="inp" type="number" id="as-delay" placeholder="120" style="margin-bottom:10px;">
+    <button class="btn c-sec btn-full" onclick="saveAutoSwitch()">💾 Salvează auto-switch</button>
+    <div id="as-status" style="margin-top:8px;font-size:12px;color:var(--text-muted);text-align:center;"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">💾 Backup & Restaurare</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Exportă toate datele ca JSON — salvează pe telefon sau cloud. Importă oricând, inclusiv pe telefon nou.</div>
+    <button class="btn c-ok btn-full" onclick="exportBackup()" style="margin-bottom:8px;">💾 Exportă backup complet (JSON)</button>
+    <input type="file" id="import-file" accept=".json" onchange="importBackup(this)" style="display:none;">
+    <button class="btn c-sec btn-full" onclick="document.getElementById('import-file').click()" style="margin-bottom:8px;">📂 Importă backup (JSON)</button>
+    <div id="backup-status" style="font-size:12px;color:var(--teal);text-align:center;min-height:16px;"></div>
+    <div style="margin-top:10px;padding:10px;background:var(--surface2);border-radius:8px;font-size:11px;color:var(--text-muted);">
+      ⚠️ Fă backup săptămânal — datele din browser se pot pierde la ștergerea cache-ului.
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">Resetare</div>
+    <button class="btn c-warn btn-full" onclick="clearAllData()">🗑️ Șterge toate datele</button>
+  </div>
+</div>
+
+<!-- ===== ISTORIC ===== -->
+<div class="page" id="page-istoric">
+  <div id="istoric-wrap">
+    <div style="text-align:center;padding:38px 18px;color:var(--text-muted);">
+      <div style="font-size:30px;margin-bottom:7px;">📋</div>
+      <div>Nu există înregistrări salvate.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== EXPORT ===== -->
+<div class="page" id="page-export">
+
+  <!-- LIMBĂ -->
+  <div class="card">
+    <div class="sec-title">🌐 Limbă raport / Report language</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" id="btn-lang-ro" onclick="setLang('ro')" style="flex:1;background:var(--accent);color:#000;font-weight:700;">🇷🇴 Română</button>
+      <button class="btn c-sec" id="btn-lang-en" onclick="setLang('en')" style="flex:1;font-weight:700;">🇬🇧 English</button>
+    </div>
+  </div>
+
+  <!-- EXPORT TRASEU -->
+  <div class="card">
+    <div class="sec-title">🗺️ Export traseu cu hartă</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Exportă traseul GPS cu hartă interactivă. Deschide fișierul descărcat în Chrome cu internet activ.</div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:10px;">
+      <input type="checkbox" id="exp-traseu-toate" style="width:16px;height:16px;">
+      <span style="color:var(--text-muted);">Include toate zilele (nu doar azi)</span>
+    </label>
+    <button class="btn c-sec btn-full" onclick="exportTraseu()">🗺️ Descarcă hartă traseu (HTML)</button>
+    <div id="exp-traseu-status" style="font-size:12px;color:var(--teal);text-align:center;margin-top:6px;min-height:16px;"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">📄 Raport ziua curentă</div>
+    <div id="exp-azi-preview" style="font-size:13px;margin-bottom:12px;"></div>
+    <button class="btn c-condus btn-full" onclick="exportZi()">📄 Descarcă raport azi</button>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">📅 Raport săptămânal</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 40px;gap:8px;margin-bottom:8px;">
+      <input class="inp" type="number" id="exp-w-nr" placeholder="Săpt. nr.">
+      <input class="inp" type="number" id="exp-w-an" placeholder="Anul">
+      <button class="btn c-sec" onclick="prevW()" style="padding:0;font-size:16px;">👁</button>
+    </div>
+    <div id="exp-w-prev" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;min-height:16px;"></div>
+    <button class="btn c-sec btn-full" onclick="exportSapt()">📅 Descarcă raport săptămânal</button>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">📆 Raport lunar</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 40px;gap:8px;margin-bottom:8px;">
+      <select class="inp" id="exp-m-luna">
+        <option value="1">Ianuarie</option><option value="2">Februarie</option>
+        <option value="3">Martie</option><option value="4">Aprilie</option>
+        <option value="5">Mai</option><option value="6">Iunie</option>
+        <option value="7">Iulie</option><option value="8">August</option>
+        <option value="9">Septembrie</option><option value="10">Octombrie</option>
+        <option value="11">Noiembrie</option><option value="12">Decembrie</option>
+      </select>
+      <input class="inp" type="number" id="exp-m-an" placeholder="Anul">
+      <button class="btn c-sec" onclick="prevM()" style="padding:0;font-size:16px;">👁</button>
+    </div>
+    <div id="exp-m-prev" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;min-height:16px;"></div>
+    <button class="btn c-sec btn-full" onclick="exportLuna()">📆 Descarcă raport lunar</button>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">📆 Raport anual</div>
+    <div style="display:grid;grid-template-columns:1fr 40px;gap:8px;margin-bottom:8px;">
+      <input class="inp" type="number" id="exp-a-an" placeholder="Anul">
+      <button class="btn c-sec" onclick="prevA()" style="padding:0;font-size:16px;">👁</button>
+    </div>
+    <div id="exp-a-prev" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;min-height:16px;"></div>
+    <button class="btn c-sec btn-full" onclick="exportAn()">📆 Descarcă raport anual</button>
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<!-- MODAL EDITARE -->
+<div class="modal-overlay" id="modal-edit">
+  <div class="modal">
+    <div class="modal-hdr">
+      <span style="font-weight:700;font-size:15px;">✏️ Editează activități</span>
+      <button onclick="closeEdit()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="sec-title">➕ Adaugă activitate manual</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Ora start</div>
+          <input class="inp" type="time" id="edit-start">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Ora stop</div>
+          <input class="inp" type="time" id="edit-stop">
+        </div>
+      </div>
+      <div style="margin-bottom:8px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Tipul activității</div>
+        <select class="inp" id="edit-type">
+          <option value="condus">🚛 Conduc</option>
+          <option value="pauza">☕ Pauză</option>
+          <option value="odihna">🛌 Odihnă</option>
+          <option value="disponibil">🕐 Disponibil</option>
+          <option value="descarcare">🏗️ Descărcare</option>
+          <option value="incarcare">📦 Încărcare</option>
+          <option value="alimentare">⛽ Alimentare</option>
+          <option value="servicii">🔧 Alte servicii</option>
+        </select>
+      </div>
+      <button class="btn c-ok btn-full" onclick="addSegManual()" style="margin-bottom:14px;">➕ Adaugă</button>
+      <div style="border-top:1px solid var(--border);margin-bottom:14px;"></div>
+      <div class="sec-title">📋 Segmente azi</div>
+      <div id="edit-segs"></div>
+    </div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border);">
+      <button class="btn c-condus btn-full" onclick="closeEdit()">✓ Salvează & Închide</button>
+    </div>
+  </div>
+</div>
+
+<!-- AUTO-SWITCH BANNER -->
+<div id="as-banner" style="position:fixed;bottom:env(safe-area-inset-bottom,0px);left:0;right:0;z-index:300;background:linear-gradient(135deg,#0e6655,#0a4f42);border-top:2px solid var(--teal);padding:10px 16px;display:none;align-items:center;gap:10px;">
+  <div style="font-size:22px;" id="as-icon">🚛</div>
+  <div style="flex:1;">
+    <div style="font-weight:600;font-size:13px;color:#fff;" id="as-title">Auto-switch</div>
+    <div style="font-size:11px;color:rgba(255,255,255,.7);" id="as-sub">—</div>
+  </div>
+  <button onclick="document.getElementById('as-banner').style.display='none'" style="background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:18px;">✕</button>
+</div>
+
+<script>
+// ============================================================
+// LIMBĂ ȘI TRADUCERI
+// ============================================================
+let LANG = 'ro';
+const T = {
+  ro: {
+    driver: 'Conducător auto', company: 'Firmă', vehicle: 'Vehicul',
+    date: 'Data', activity: 'Activitate', start: 'Pornit', stop: 'Oprit', duration: 'Durată',
+    totalSummary: 'TOTALIZARE', paidHours: 'Ore plătite', salary: 'Salariu',
+    kmTotal: 'Km parcurși', fuel: 'Combustibil', workedDays: 'Zile lucrate',
+    rate: 'Tarif', generatedAt: 'Generat la', activities: {
+      condus:'Condus',pauza:'Pauze',odihna:'Odihnă',disponibil:'Disponibil',
+      descarcare:'Descărcare',incarcare:'Încărcare',alimentare:'Alimentare',servicii:'Alte servicii',liber:'Zi liberă'
+    }
+  },
+  en: {
+    driver: 'Driver', company: 'Company', vehicle: 'Vehicle',
+    date: 'Date', activity: 'Activity', start: 'Start', stop: 'Stop', duration: 'Duration',
+    totalSummary: 'SUMMARY', paidHours: 'Paid hours', salary: 'Salary',
+    kmTotal: 'Km driven', fuel: 'Fuel', workedDays: 'Working days',
+    rate: 'Rate', generatedAt: 'Generated at', activities: {
+      condus:'Driving',pauza:'Break',odihna:'Rest',disponibil:'Available',
+      descarcare:'Unloading',incarcare:'Loading',alimentare:'Refueling',servicii:'Other services',liber:'Day off'
+    }
+  }
+};
+function setLang(l){
+  LANG=l;
+  document.getElementById('btn-lang-ro').className='btn'+(l==='ro'?' c-condus':' c-sec');
+  document.getElementById('btn-lang-ro').style.cssText=l==='ro'?'flex:1;background:var(--accent);color:#000;':'flex:1;';
+  document.getElementById('btn-lang-en').className='btn'+(l==='en'?' c-condus':' c-sec');
+  document.getElementById('btn-lang-en').style.cssText=l==='en'?'flex:1;background:var(--accent);color:#000;':'flex:1;';
+}
+function tr(key){ return T[LANG][key] || T['ro'][key] || key; }
+function trAct(type){ return (T[LANG].activities||{})[type] || (T['ro'].activities||{})[type] || type; }
+
+// ============================================================
+// CONSTANTE
+// ============================================================
+const LABEL={condus:'Conduc',pauza:'Pauză',odihna:'Odihnă',disponibil:'Disponibil',descarcare:'Descărcare',incarcare:'Încărcare',alimentare:'Alimentare',servicii:'Alte servicii',liber:'Zi liberă'};
+const ICON={condus:'🚛',pauza:'☕',odihna:'🛌',disponibil:'🕐',descarcare:'🏗️',incarcare:'📦',alimentare:'⛽',servicii:'🔧',liber:'🏖️'};
+const COLOR={condus:'var(--accent)',pauza:'var(--blue)',odihna:'var(--green)',disponibil:'#aed6f1',descarcare:'var(--accent2)',incarcare:'var(--purple)',alimentare:'var(--teal)',servicii:'var(--text-muted)',liber:'var(--green)'};
+const BADGE={condus:'b-condus',pauza:'b-pauza',odihna:'b-odihna',disponibil:'b-disponibil',descarcare:'b-descarcare',incarcare:'b-incarcare',alimentare:'b-alimentare',servicii:'b-servicii',liber:'b-liber'};
+const PLATIT=['condus','disponibil','descarcare','incarcare','alimentare','servicii'];
+const LUNI=['','Ianuarie','Februarie','Martie','Aprilie','Mai','Iunie','Iulie','August','Septembrie','Octombrie','Noiembrie','Decembrie'];
+
+// ============================================================
+// STATE
+// ============================================================
+function emptyState(date){
+  return{date,currentActivity:null,actStart:null,turaStart:null,todaySegments:[],
+    totals:{condus:0,pauza:0,odihna:0,disponibil:0,descarcare:0,incarcare:0,alimentare:0,servicii:0},
+    kmGPS:0,kmManual:0,gpsCoords:[],nota:'',alimentari:[],masina:'',_lastSave:null};
+}
+let state=emptyState(todayKey());
+let profile={firma:'',masina:'',tarif:0,masiniIst:[],autoSwitch:{enabled:false,minSpeed:10,stopDelay:120}};
+let tickInterval=null,gpsWatchId=null,gpsActive=false;
+let asEnabled=false,asMinSpeed=10,asStopDelay=120,asStopTimer=null,asLastSpeed=0,asBannerTimer=null;
+let leafletMap=null,leafletLine=null,leafletS=null,leafletE=null;
+let zileLibereList=[];
+
+function todayKey(){return new Date().toISOString().slice(0,10);}
+function pad(n){return String(n).padStart(2,'0');}
+function secToHMS(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;return pad(h)+':'+pad(m)+':'+pad(ss);}
+function secToHM(s){return Math.floor(s/3600)+':'+pad(Math.floor((s%3600)/60));}
+function fmtTime(ts){if(!ts)return'—';const d=new Date(ts);return pad(d.getHours())+':'+pad(d.getMinutes());}
+function fmtDate(d){if(!d)return'—';return new Date(d).toLocaleDateString('ro-RO',{weekday:'short',day:'2-digit',month:'long',year:'numeric'});}
+
+// ============================================================
+// STORAGE
+// ============================================================
+function saveState(){state._lastSave=Date.now();try{localStorage.setItem('taho_'+state.date,JSON.stringify(state));}catch(e){}}
+function loadState(){
+  const k=todayKey();
+  try{const r=localStorage.getItem('taho_'+k);if(r)Object.assign(state,JSON.parse(r));}catch(e){}
+  state.date=k;
+  if(!state.alimentari)state.alimentari=[];
+  if(!state.gpsCoords)state.gpsCoords=[];
+  if(!state.totals)state.totals={condus:0,pauza:0,odihna:0,disponibil:0,descarcare:0,incarcare:0,alimentare:0,servicii:0};
+}
+function saveProfile(){try{localStorage.setItem('taho_profile',JSON.stringify(profile));}catch(e){}}
+function loadProfile(){try{const r=localStorage.getItem('taho_profile');if(r)Object.assign(profile,JSON.parse(r));}catch(e){};if(!profile.masiniIst)profile.masiniIst=[];if(!profile.autoSwitch)profile.autoSwitch={enabled:false,minSpeed:10,stopDelay:120};}
+function getAllDays(){
+  const days=[];
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(k&&k.startsWith('taho_')&&!k.includes('profile')){
+      try{days.push(JSON.parse(localStorage.getItem(k)));}catch(e){}
+    }
+  }
+  return days.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+}
+function clearAllData(){
+  if(!confirm('Ștergi TOATE datele?'))return;
+  for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i);if(k&&k.startsWith('taho_'))localStorage.removeItem(k);}
+  state=emptyState(todayKey());updateAll();renderAlim();
+}
+
+// ============================================================
+// PAGES
+// ============================================================
+const TABS=['dashboard','traseu','alimentare','salariu','note','setari','istoric','export'];
+function showPage(id){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  document.querySelectorAll('.tab')[TABS.indexOf(id)]?.classList.add('active');
+  if(id==='istoric')renderIstoric();
+  if(id==='export')renderExportPreview();
+  if(id==='note')loadNota();
+  if(id==='setari')renderSetari();
+  if(id==='salariu')updateSalariu();
+  if(id==='alimentare')renderAlim();
+  if(id==='traseu'){
+    setTimeout(()=>{
+      if(leafletMap){leafletMap.invalidateSize();if(state.gpsCoords&&state.gpsCoords.length>1)drawTrack();}
+      else initMap();
+    },300);
+  }
+}
+
+// ============================================================
+// ACTIVITY
+// ============================================================
+function startAct(type){
+  if(state.currentActivity)_stopCurrent();
+  state.currentActivity=type;
+  state.actStart=Date.now();
+  state._lastSave=Date.now();
+  if(!state.turaStart)state.turaStart=Date.now();
+  saveState();updateAll();
+}
+function stopAct(){
+  if(!state.currentActivity)return;
+  _stopCurrent();
+  saveState();updateAll();
+}
+function _stopCurrent(){
+  if(!state.currentActivity)return;
+  const dur=Math.round((Date.now()-state.actStart)/1000);
+  state.totals[state.currentActivity]=(state.totals[state.currentActivity]||0)+dur;
+  state.todaySegments.push({type:state.currentActivity,start:state.actStart,end:Date.now(),dur});
+  state.currentActivity=null;state.actStart=null;
+}
+
+function liveTots(){
+  const t={...state.totals};
+  if(state.currentActivity&&state.actStart){const el=Math.round((Date.now()-state.actStart)/1000);t[state.currentActivity]=(t[state.currentActivity]||0)+el;}
+  return t;
+}
+function oreLucrate(t){return PLATIT.reduce((s,k)=>s+(t[k]||0),0);}
+
+function updateAll(){
+  const act=state.currentActivity;
+  // badge
+  const badge=document.getElementById('status-badge');
+  if(act){badge.className='badge '+BADGE[act];badge.textContent=ICON[act]+' '+LABEL[act];}
+  else{badge.className='badge b-liber2';badge.textContent='⚪ Liber';}
+  document.getElementById('timer-lbl').textContent=act?('Timp '+LABEL[act].toLowerCase()+' curent'):'Nicio activitate activă';
+  if(!act)document.getElementById('main-timer').textContent='00:00:00';
+  document.getElementById('btn-stop').disabled=!act;
+  document.getElementById('tura-start').textContent=state.turaStart?fmtTime(state.turaStart):'—';
+  document.getElementById('bg-banner').classList.toggle('show',!!act);
+  refreshTots(liveTots());
+  updateKmDisplay();
+  updateSalariu();
+}
+
+function refreshTots(t){
+  document.getElementById('t-condus').textContent=secToHM(t.condus||0);
+  document.getElementById('t-pauza').textContent=secToHM(t.pauza||0);
+  document.getElementById('t-odih').textContent=secToHM(t.odihna||0);
+  document.getElementById('t-disp').textContent=secToHM(t.disponibil||0);
+  document.getElementById('t-desc').textContent=secToHM(t.descarcare||0);
+  document.getElementById('t-inc').textContent=secToHM(t.incarcare||0);
+  document.getElementById('t-alim').textContent=secToHM(t.alimentare||0);
+  document.getElementById('t-serv').textContent=secToHM(t.servicii||0);
+  document.getElementById('t-lucrat').textContent=secToHM(oreLucrate(t));
+}
+
+// ============================================================
+// TICK
+// ============================================================
+function startTick(){
+  clearInterval(tickInterval);
+  tickInterval=setInterval(()=>{
+    if(state.currentActivity&&state.actStart){
+      const el=Math.round((Date.now()-state.actStart)/1000);
+      document.getElementById('main-timer').textContent=secToHMS(el);
+      const t=liveTots();
+      refreshTots(t);
+      if(state.turaStart){
+        const ts=Math.round((Date.now()-state.turaStart)/1000);
+        document.getElementById('tura-total').textContent=secToHMS(ts);
+        ts>36000?showAlert('alert-tura'):hideAlert('alert-tura');
+      }
+      const dh=(t.condus||0)/3600;
+      if(dh>=4.5){document.getElementById('alert-h').textContent=dh.toFixed(1);showAlert('alert-condus');}
+      else hideAlert('alert-condus');
+    }
+    // midnight reset
+    const nk=todayKey();
+    if(nk!==state.date){state.masina=profile.masina;saveState();state=emptyState(nk);}
+    updateDate();
+    if(state.currentActivity)saveState();
+  },1000);
+}
+function showAlert(id){document.getElementById(id)?.classList.add('show');}
+function hideAlert(id){document.getElementById(id)?.classList.remove('show');}
+
+// ============================================================
+// APP RESUME — recuperare timp
+// ============================================================
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){if(state.currentActivity){state._lastSave=Date.now();saveState();}}
+  else onResume();
+});
+window.addEventListener('beforeunload',()=>{if(state.currentActivity){state._lastSave=Date.now();saveState();}});
+setInterval(()=>{if(state.currentActivity){state._lastSave=Date.now();saveState();}},10000);
+
+function onResume(){
+  const k=todayKey();
+  let saved=null;
+  try{const r=localStorage.getItem('taho_'+k);if(r)saved=JSON.parse(r);}catch(e){}
+  if(!saved||!saved.currentActivity||!saved._lastSave){updateAll();return;}
+  const gap=Math.round((Date.now()-saved._lastSave)/1000);
+  Object.assign(state,saved);
+  if(gap<5){updateAll();return;}
+  state.totals[state.currentActivity]=(state.totals[state.currentActivity]||0)+gap;
+  state.todaySegments.push({type:state.currentActivity,start:saved._lastSave,end:Date.now(),dur:gap,recovered:true});
+  state.actStart=Date.now();state._lastSave=Date.now();
+  saveState();
+  const h=Math.floor(gap/3600),m=Math.floor((gap%3600)/60),s=gap%60;
+  const ds=h>0?h+'h '+pad(m)+'min':m>0?m+'min '+s+'s':s+'s';
+  document.getElementById('recovery-text').textContent=ICON[state.currentActivity]+' Recuperat '+ds+' de '+LABEL[state.currentActivity].toLowerCase();
+  document.getElementById('recovery-banner').classList.add('show');
+  updateAll();
+}
+
+// ============================================================
+// ZILE LIBERE DETECȚIE
+// ============================================================
+function checkZileLibere(){
+  const azi=todayKey();
+  const zile=[];
+  for(let i=1;i<=14;i++){
+    const d=new Date();d.setDate(d.getDate()-i);
+    const k=d.toISOString().slice(0,10);
+    if(k===azi)continue;
+    try{
+      const r=localStorage.getItem('taho_'+k);
+      if(!r){zile.push(k);}
+      else{const st=JSON.parse(r);if(!st.todaySegments||st.todaySegments.length===0)zile.push(k);}
+    }catch(e){}
+  }
+  if(zile.length>0){
+    zileLibereList=zile;
+    document.getElementById('zile-libere-text').textContent=zile.map(k=>fmtDate(k+'T12:00:00')).join(', ');
+    document.getElementById('zile-libere-banner').style.display='block';
+  }
+}
+
+function marcheazaZile(tip){
+  zileLibereList.forEach(k=>{
+    const st=JSON.parse(localStorage.getItem('taho_'+k)||'null')||emptyState(k);
+    const dur=86400,startTs=new Date(k+'T00:00:00').getTime();
+    if(tip==='odihna'){st.totals.odihna=(st.totals.odihna||0)+dur;st.todaySegments.push({type:'odihna',start:startTs,end:startTs+dur*1000,dur,auto:true});}
+    else{st.nota=(st.nota?st.nota+' | ':'')+'Zi liberă';st.todaySegments.push({type:'liber',start:startTs,end:startTs+dur*1000,dur,auto:true});}
+    st._lastSave=Date.now();localStorage.setItem('taho_'+k,JSON.stringify(st));
+  });
+  document.getElementById('zile-libere-banner').style.display='none';
+  alert('✅ '+zileLibereList.length+' zi(le) marcate ca '+(tip==='odihna'?'Odihnă':'Libere')+'.');
+  zileLibereList=[];
+}
+
+function marcheazaAziLibera(){
+  const tip=confirm('Marchezi ASTĂZI ca:\n✅ OK = Odihnă\n❌ Anulează = Zi liberă')?'odihna':'liber';
+  const dur=86400,startTs=new Date(state.date+'T00:00:00').getTime();
+  if(tip==='odihna'){state.totals.odihna=(state.totals.odihna||0)+dur;}
+  else{state.nota=(state.nota?state.nota+' | ':'')+'Zi liberă';}
+  state.todaySegments.push({type:tip,start:startTs,end:startTs+dur*1000,dur,auto:true});
+  saveState();updateAll();
+  alert('✅ Ziua a fost marcată!');
+}
+
+// ============================================================
+// GPS
+// ============================================================
+function initMap(){
+  if(leafletMap)return;
+  if(typeof L==='undefined'){
+    // Leaflet nu s-a încărcat — reîncercăm
+    setTimeout(()=>{
+      if(typeof L!=='undefined') initMap();
+      else {
+        document.getElementById('map-overlay').innerHTML='<div style="font-size:13px;color:var(--text-muted);text-align:center;padding:20px;">🌐 Harta necesită conexiune internet.<br>Funcționează pe Netlify și în APK.</div>';
+      }
+    },2000);
+    return;
+  }
+  leafletMap=L.map('leaflet-map',{zoomControl:true});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(leafletMap);
+  leafletMap.setView([45.9432,24.9668],7);
+  setTimeout(()=>leafletMap.invalidateSize(),200);
+}
+
+function toggleGPS(){if(gpsActive)stopGPS();else startGPS();}
+
+function startGPS(){
+  if(!navigator.geolocation){document.getElementById('gps-status').textContent='GPS indisponibil.';return;}
+  gpsActive=true;
+  document.getElementById('gps-dot').classList.add('on');
+  document.getElementById('btn-gps').textContent='⏹ Oprește GPS';
+  document.getElementById('btn-gps').className='btn c-stop';
+  document.getElementById('gps-status').textContent='📡 Obținere semnal GPS...';
+  CapGPS.startWatch(pos=>{
+    const acc=pos.coords.accuracy;
+    if(acc>50){document.getElementById('gps-status').textContent='📡 Semnal slab (±'+Math.round(acc)+'m)...';return;}
+    const p={lat:pos.coords.latitude,lng:pos.coords.longitude,ts:Date.now(),acc:Math.round(acc)};
+    const spd=pos.coords.speed!=null?pos.coords.speed*3.6:null;
+    if(spd!==null)handleSpeed(spd);
+    if(state.gpsCoords.length>0){
+      const prev=state.gpsCoords[state.gpsCoords.length-1];
+      const d=haversine(prev.lat,prev.lng,p.lat,p.lng);
+      const dt=(p.ts-prev.ts)/1000;
+      if(d<0.01)return;
+      if(dt>0&&(d/dt)*3600>250){document.getElementById('gps-status').textContent='⚠️ GPS jump ignorat';return;}
+      if(d>0.5&&dt<10){document.getElementById('gps-status').textContent='⚠️ Salt GPS ignorat';return;}
+      state.kmGPS=Math.round((state.kmGPS+d)*100)/100;
+      state.gpsCoords.push(p);
+    }else{
+      state.gpsCoords.push(p);
+      if(leafletMap){leafletMap.invalidateSize();leafletMap.setView([p.lat,p.lng],14);document.getElementById('map-overlay').style.display='none';}
+    }
+    updateKmDisplay();
+    document.getElementById('gps-status').textContent='📍 '+p.lat.toFixed(5)+', '+p.lng.toFixed(5)+' | ±'+p.acc+'m | '+state.kmGPS.toFixed(1)+' km'+(spd!==null?' | '+spd.toFixed(1)+' km/h':'');
+    drawTrack();saveState();
+  },err=>{
+    document.getElementById('gps-status').textContent='Eroare GPS: '+(err.message||err);
+    gpsActive=false;document.getElementById('gps-dot').classList.remove('on');
+    document.getElementById('btn-gps').textContent='📍 Pornire GPS';document.getElementById('btn-gps').className='btn c-condus';
+  },{enableHighAccuracy:true,maximumAge:0,timeout:30000}).then(w=>{gpsWatchId=w;});
+}
+
+function stopGPS(){
+  CapGPS.clearWatch(gpsWatchId);
+  gpsActive=false;document.getElementById('gps-dot').classList.remove('on');
+  document.getElementById('btn-gps').textContent='📍 Pornire GPS';document.getElementById('btn-gps').className='btn c-condus';
+  document.getElementById('gps-status').textContent='GPS oprit. '+state.kmGPS.toFixed(1)+' km înregistrați.';
+}
+
+function clearGPS(){
+  stopGPS();state.gpsCoords=[];state.kmGPS=0;updateKmDisplay();
+  if(leafletLine){leafletMap.removeLayer(leafletLine);leafletLine=null;}
+  if(leafletS){leafletMap.removeLayer(leafletS);leafletS=null;}
+  if(leafletE){leafletMap.removeLayer(leafletE);leafletE=null;}
+  document.getElementById('map-overlay').style.display='flex';
+  document.getElementById('gps-status').textContent='Traseul a fost șters.';saveState();
+}
+
+function haversine(la1,ln1,la2,ln2){
+  const R=6371,dLa=(la2-la1)*Math.PI/180,dLn=(ln2-ln1)*Math.PI/180;
+  const a=Math.sin(dLa/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLn/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+function drawTrack(){
+  if(!leafletMap||typeof L==='undefined')return;
+  const pts=state.gpsCoords;
+  if(!pts||pts.length<2){document.getElementById('map-overlay').style.display='flex';return;}
+  document.getElementById('map-overlay').style.display='none';
+  const lls=pts.map(p=>[p.lat,p.lng]);
+  if(leafletLine)leafletMap.removeLayer(leafletLine);
+  if(leafletS)leafletMap.removeLayer(leafletS);
+  if(leafletE)leafletMap.removeLayer(leafletE);
+  leafletLine=L.polyline(lls,{color:'#f0a500',weight:4,opacity:.9}).addTo(leafletMap);
+  const gi=ico=>(s,c)=>L.divIcon({html:`<div style="width:${s}px;height:${s}px;background:${c};border:2px solid #fff;border-radius:50%;box-shadow:0 0 4px rgba(0,0,0,.5);"></div>`,iconSize:[s,s],iconAnchor:[s/2,s/2],className:''});
+  leafletS=L.marker([pts[0].lat,pts[0].lng],{icon:L.divIcon({html:'<div style="width:12px;height:12px;background:#2ea043;border:2px solid #fff;border-radius:50%;"></div>',iconSize:[12,12],iconAnchor:[6,6],className:''})}).addTo(leafletMap);
+  const last=pts[pts.length-1];
+  leafletE=L.marker([last.lat,last.lng],{icon:L.divIcon({html:'<div style="width:12px;height:12px;background:#da3633;border:2px solid #fff;border-radius:50%;"></div>',iconSize:[12,12],iconAnchor:[6,6],className:''})}).addTo(leafletMap);
+  leafletMap.invalidateSize();
+  setTimeout(()=>leafletMap.fitBounds(leafletLine.getBounds(),{padding:[30,30]}),150);
+}
+
+// ============================================================
+// AUTO-SWITCH VITEZĂ
+// ============================================================
+function handleSpeed(kmh){
+  if(!asEnabled)return;
+  asLastSpeed=kmh;
+  if(kmh>=asMinSpeed){
+    if(asStopTimer){clearTimeout(asStopTimer);asStopTimer=null;}
+    if(state.currentActivity!=='condus'){
+      startAct('condus');
+      showAsBanner('🚛','Auto: Conduc activat',kmh.toFixed(1)+' km/h detectat');
+    }
+  }else if(kmh<2){
+    if(state.currentActivity==='condus'&&!asStopTimer){
+      asStopTimer=setTimeout(()=>{
+        asStopTimer=null;
+        if(state.currentActivity==='condus'&&asLastSpeed<2){
+          startAct('disponibil');
+          showAsBanner('🕐','Auto: Disponibil activat','Vehicul oprit >'+asStopDelay+'s');
+        }
+      },asStopDelay*1000);
+    }
+  }else{if(asStopTimer){clearTimeout(asStopTimer);asStopTimer=null;}}
+}
+function showAsBanner(icon,title,sub){
+  document.getElementById('as-icon').textContent=icon;
+  document.getElementById('as-title').textContent=title;
+  document.getElementById('as-sub').textContent=sub;
+  document.getElementById('as-banner').style.display='flex';
+  if(asBannerTimer)clearTimeout(asBannerTimer);
+  asBannerTimer=setTimeout(()=>document.getElementById('as-banner').style.display='none',5000);
+}
+function updateAsDashStatus(){
+  document.getElementById('as-dash-status').textContent = asEnabled ? ('Activ — prag: '+asMinSpeed+' km/h') : 'Dezactivat';
+  document.getElementById('as-dash-status').style.color = asEnabled ? 'var(--teal)' : 'var(--text-muted)';
+}
+
+function toggleAutoSwitch(){
+  asEnabled=!asEnabled;
+  document.getElementById('as-track').className='toggle-track'+(asEnabled?' on':'');
+  document.getElementById('as-thumb').className='toggle-thumb'+(asEnabled?' on':'');
+  updateAsDashStatus();
+}
+function saveAutoSwitch(){
+  const sp=parseFloat(document.getElementById('as-speed').value)||10;
+  const dl=parseFloat(document.getElementById('as-delay').value)||120;
+  asMinSpeed=sp;asStopDelay=dl;
+  profile.autoSwitch={enabled:asEnabled,minSpeed:sp,stopDelay:dl};
+  saveProfile();
+  document.getElementById('as-status').textContent='✅ Salvat — '+(asEnabled?'Activat':'Dezactivat')+', prag: '+sp+' km/h';
+  setTimeout(()=>document.getElementById('as-status').textContent='',4000);
+}
+function loadAutoSwitch(){
+  const as=profile.autoSwitch||{};
+  asEnabled=as.enabled||false;asMinSpeed=as.minSpeed||10;asStopDelay=as.stopDelay||120;
+  document.getElementById('as-track').className='toggle-track'+(asEnabled?' on':'');
+  document.getElementById('as-thumb').className='toggle-thumb'+(asEnabled?' on':'');
+  document.getElementById('as-speed').value=asMinSpeed;
+  document.getElementById('as-delay').value=asStopDelay;
+  updateAsDashStatus();
+}
+
+// ============================================================
+// KM
+// ============================================================
+function calcKmBord(){
+  const s=parseFloat(document.getElementById('km-start').value);
+  const e=parseFloat(document.getElementById('km-end').value);
+  if(isNaN(s)||isNaN(e)||e<=s){alert('Introduceți km valizi (final > start).');return;}
+  state.kmManual=Math.round((e-s)*10)/10;
+  document.getElementById('km-start').value='';document.getElementById('km-end').value='';
+  updateKmDisplay();saveState();
+  alert('✅ '+state.kmManual.toFixed(1)+' km calculați și salvați!');
+}
+function saveKmDirect(){
+  const v=parseFloat(document.getElementById('km-direct').value);
+  if(isNaN(v)||v<0)return;
+  state.kmManual=v;document.getElementById('km-direct').value='';
+  updateKmDisplay();saveState();
+}
+function updateKmDisplay(){
+  const t=(state.kmGPS||0)+(state.kmManual||0);
+  document.getElementById('km-gps').textContent=(state.kmGPS||0).toFixed(1);
+  document.getElementById('km-man').textContent=(state.kmManual||0).toFixed(1);
+  document.getElementById('km-tot').textContent=t.toFixed(1);
+  document.getElementById('km-azi').textContent=t.toFixed(1)+' km';
+}
+
+// ============================================================
+// ALIMENTARE
+// ============================================================
+function saveAlim(){
+  const l=parseFloat(document.getElementById('alim-litri').value);
+  const p=parseFloat(document.getElementById('alim-pret').value)||0;
+  const s=document.getElementById('alim-statie').value.trim();
+  if(isNaN(l)||l<=0){alert('Introduceți litri valizi.');return;}
+  if(!state.alimentari)state.alimentari=[];
+  state.alimentari.push({ts:Date.now(),litri:l,pret:p,statie:s});
+  saveState();
+  document.getElementById('alim-litri').value='';
+  document.getElementById('alim-pret').value='';
+  document.getElementById('alim-statie').value='';
+  document.getElementById('alim-status').textContent='✓ Salvat la '+fmtTime(Date.now());
+  setTimeout(()=>document.getElementById('alim-status').textContent='',4000);
+  renderAlim();
+}
+function renderAlim(){
+  if(!state.alimentari)state.alimentari=[];
+  const tL=state.alimentari.reduce((s,a)=>s+a.litri,0);
+  const tR=state.alimentari.reduce((s,a)=>s+(a.litri*a.pret),0);
+  document.getElementById('alim-tot-l').textContent=tL.toFixed(1);
+  document.getElementById('alim-tot-r').textContent=tR.toFixed(2);
+  document.getElementById('alim-tot-n').textContent=state.alimentari.length;
+  document.getElementById('alim-list').innerHTML=state.alimentari.length?
+    state.alimentari.map((a,i)=>`<div style="display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <span style="font-size:16px;">⛽</span>
+      <div style="flex:1;"><div><strong style="color:var(--teal);">${a.litri} L</strong>${a.pret?' — '+(a.litri*a.pret).toFixed(2)+' RON':''}</div>
+      <div style="font-size:11px;color:var(--text-muted);">${fmtTime(a.ts)}${a.statie?' · '+a.statie:''}</div></div>
+      <button onclick="delAlim(${i})" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;">✕</button>
+    </div>`).join(''):
+    '<div style="color:var(--text-muted);font-size:13px;">Nicio alimentare.</div>';
+}
+function delAlim(i){state.alimentari.splice(i,1);saveState();renderAlim();}
+
+// ============================================================
+// SALARIU
+// ============================================================
+function saveTarif(){
+  const v=parseFloat(document.getElementById('tarif-inp').value);
+  if(isNaN(v)||v<0)return;
+  profile.tarif=v;saveProfile();
+  document.getElementById('tarif-afis').textContent=v.toFixed(2)+' €/h';
+  document.getElementById('tarif-inp').value='';
+  updateSalariu();
+}
+function updateSalariu(){
+  const t=liveTots();
+  const pauze=t.pauza||0,lucrat=oreLucrate(t),platit=Math.max(0,lucrat-pauze);
+  const eur=((platit/3600)*(profile.tarif||0)).toFixed(2);
+  document.getElementById('sal-total').textContent='€ '+eur;
+  document.getElementById('sal-formula').textContent=secToHM(lucrat)+' − '+secToHM(pauze)+' = '+secToHM(platit)+' × '+(profile.tarif||0).toFixed(2)+'€/h';
+  document.getElementById('sal-lucrate').textContent=secToHM(lucrat);
+  document.getElementById('sal-pauze').textContent=secToHM(pauze);
+  document.getElementById('sal-platite').textContent=secToHM(platit);
+  document.getElementById('tarif-afis').textContent=profile.tarif?(profile.tarif.toFixed(2)+' €/h'):'nesetat';
+}
+function calcSapt(){
+  const days=getAllDays().slice(0,7);
+  if(!days.length){document.getElementById('sal-sapt').textContent='Nu există date.';return;}
+  let totalSec=0;
+  const rows=days.map(d=>{
+    const t=d.totals||{},pauze=t.pauza||0,lucrat=PLATIT.reduce((s,k)=>s+(t[k]||0),0),platit=Math.max(0,lucrat-pauze);
+    totalSec+=platit;
+    const eur=((platit/3600)*(profile.tarif||0)).toFixed(2);
+    return`<div class="info-row"><span class="info-lbl">${fmtDate(d.date+'T12:00:00')}</span><span>${secToHM(platit)}h → <strong style="color:var(--green);">${eur}€</strong></span></div>`;
+  }).join('');
+  document.getElementById('sal-sapt').innerHTML=rows+
+    `<div style="margin-top:10px;padding:10px;background:linear-gradient(135deg,rgba(46,160,67,.15),rgba(46,160,67,.05));border:1px solid rgba(46,160,67,.3);border-radius:8px;text-align:center;">
+      <div style="font-size:11px;color:var(--text-muted);">Total săptămână</div>
+      <div style="font-size:28px;font-weight:700;color:var(--green);">€ ${((totalSec/3600)*(profile.tarif||0)).toFixed(2)}</div>
+    </div>`;
+}
+
+// ============================================================
+// NOTE
+// ============================================================
+function saveNota(){state.nota=document.getElementById('nota-txt').value.trim();saveState();document.getElementById('nota-status').textContent='✓ Salvat la '+fmtTime(Date.now());loadNota();}
+function clearNota(){state.nota='';saveState();document.getElementById('nota-txt').value='';document.getElementById('nota-status').textContent='';document.getElementById('nota-preview').style.display='none';}
+function loadNota(){
+  const p=document.getElementById('nota-preview');
+  if(state.nota){p.style.display='block';document.getElementById('nota-saved').textContent=state.nota;document.getElementById('nota-txt').value=state.nota;}
+  else p.style.display='none';
+}
+
+// ============================================================
+// SETĂRI
+// ============================================================
+function saveSetari(){
+  const sof=document.getElementById('set-sofer').value.trim();
+  const f=document.getElementById('set-firma').value.trim();
+  const m=document.getElementById('set-masina').value.trim();
+  if(sof)profile.sofer=sof;
+  if(f)profile.firma=f;
+  if(m){profile.masina=m;if(!profile.masiniIst.includes(m)){profile.masiniIst.unshift(m);if(profile.masiniIst.length>10)profile.masiniIst=profile.masiniIst.slice(0,10);}}
+  saveProfile();renderSetari();updateHeader();
+  document.getElementById('set-sofer').value='';
+  document.getElementById('set-firma').value='';document.getElementById('set-masina').value='';
+  alert('✅ Salvat!');
+}
+function renderSetari(){
+  document.getElementById('set-sofer-afis').textContent=profile.sofer||'—';
+  document.getElementById('set-firma-afis').textContent=profile.firma||'—';
+  document.getElementById('set-masina-afis').textContent=profile.masina||'—';
+  if(profile.masiniIst.length>0){
+    document.getElementById('masini-card').style.display='block';
+    document.getElementById('masini-list').innerHTML=profile.masiniIst.map(m=>
+      `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span>🚛 ${m}</span>
+        <button onclick="selMasina('${m}')" style="background:none;border:1px solid var(--border);color:var(--accent);border-radius:5px;padding:2px 8px;cursor:pointer;font-size:11px;">Selectează</button>
+      </div>`).join('');
+  }
+  loadAutoSwitch();
+}
+function selMasina(m){profile.masina=m;saveProfile();renderSetari();updateHeader();}
+function updateHeader(){
+  document.getElementById('hdr-masina').textContent=profile.masina||'— Mașină —';
+  document.getElementById('hdr-firma').textContent=profile.firma||'— Firmă —';
+  document.getElementById('hdr-sofer').textContent=profile.sofer||'— Șofer —';
+}
+
+// ============================================================
+// BACKUP
+// ============================================================
+function exportBackup(){
+  const backup={version:'2.0',exportedAt:new Date().toISOString(),profile:null,days:[]};
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);if(!k)continue;
+    try{
+      if(k==='taho_profile')backup.profile=JSON.parse(localStorage.getItem(k));
+      else if(k.startsWith('taho_'))backup.days.push(JSON.parse(localStorage.getItem(k)));
+    }catch(e){}
+  }
+  backup.days.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}));
+  a.download='tahodrive_backup_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();URL.revokeObjectURL(a.href);
+  document.getElementById('backup-status').textContent='✅ Backup exportat: '+backup.days.length+' zile.';
+  setTimeout(()=>document.getElementById('backup-status').textContent='',5000);
+}
+function importBackup(input){
+  const file=input.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const b=JSON.parse(e.target.result);
+      if(!b.days){alert('❌ Fișier invalid.');return;}
+      if(!confirm('Restaurezi '+b.days.length+' zile din backup-ul din '+(b.exportedAt||'').slice(0,10)+'?'))return;
+      if(b.profile){const ex=JSON.parse(localStorage.getItem('taho_profile')||'{}');localStorage.setItem('taho_profile',JSON.stringify(Object.assign({},b.profile,ex)));}
+      let imp=0;
+      b.days.forEach(day=>{
+        if(!day.date)return;
+        const k='taho_'+day.date;
+        const ex=localStorage.getItem(k);
+        if(ex){
+          const exSt=JSON.parse(ex);
+          const all=[...(exSt.todaySegments||[]),...(day.todaySegments||[])];
+          const uniq=all.filter((s,i,arr)=>arr.findIndex(x=>x.start===s.start&&x.type===s.type)===i).sort((a,b)=>a.start-b.start);
+          const tots={condus:0,pauza:0,odihna:0,disponibil:0,descarcare:0,incarcare:0,alimentare:0,servicii:0};
+          uniq.forEach(s=>{if(tots[s.type]!==undefined)tots[s.type]+=s.dur;});
+          localStorage.setItem(k,JSON.stringify({...day,todaySegments:uniq,totals:tots}));
+        }else{localStorage.setItem(k,JSON.stringify(day));}
+        imp++;
+      });
+      loadProfile();loadState();updateAll();renderSetari();
+      document.getElementById('backup-status').textContent='✅ '+imp+' zile restaurate!';
+      setTimeout(()=>document.getElementById('backup-status').textContent='',5000);
+    }catch(err){alert('❌ Eroare: '+err.message);}
+    input.value='';
+  };
+  reader.readAsText(file);
+}
+
+// ============================================================
+// EDITARE SEGMENTE
+// ============================================================
+function openEdit(){
+  const now=new Date();
+  const hm=pad(now.getHours())+':'+pad(now.getMinutes());
+  document.getElementById('edit-start').value=hm;
+  document.getElementById('edit-stop').value=hm;
+  renderEditSegs();
+  document.getElementById('modal-edit').classList.add('show');
+}
+function closeEdit(){document.getElementById('modal-edit').classList.remove('show');}
+function renderEditSegs(){
+  const list=document.getElementById('edit-segs');
+  if(!state.todaySegments.length){list.innerHTML='<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:12px;">Nicio activitate înregistrată azi.</div>';return;}
+  list.innerHTML=state.todaySegments.map((s,i)=>`
+    <div style="background:var(--surface2);border-radius:8px;padding:11px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:7px;">
+          <span style="font-size:16px;">${ICON[s.type]||'•'}</span>
+          <select onchange="editSegType(${i},this.value)" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:3px 6px;font-size:12px;">
+            ${Object.keys(LABEL).map(k=>`<option value="${k}" ${k===s.type?'selected':''}>${LABEL[k]}</option>`).join('')}
+          </select>
+        </div>
+        <button onclick="delSeg(${i})" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;">🗑️</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;">
+        <div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">Start</div>
+          <input type="time" value="${tsToTime(s.start)}" onchange="editSegTime(${i},'start',this.value)"
+            style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:13px;width:100%;">
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">Stop</div>
+          <input type="time" value="${tsToTime(s.end)}" onchange="editSegTime(${i},'end',this.value)"
+            style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:13px;width:100%;">
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Durată: <strong>${secToHM(s.dur)}</strong>${s.recovered?' ↩️ recuperat':s.auto?' 🤖 auto':''}</div>
+    </div>`).join('');
+}
+function tsToTime(ts){if(!ts)return'00:00';const d=new Date(ts);return pad(d.getHours())+':'+pad(d.getMinutes());}
+function timeToTs(str,ref){const[h,m]=str.split(':').map(Number);const d=new Date(ref||Date.now());d.setHours(h,m,0,0);return d.getTime();}
+function editSegType(i,type){state.todaySegments[i].type=type;recalcFromSegs();}
+function editSegTime(i,which,val){
+  const s=state.todaySegments[i];
+  if(which==='start')s.start=timeToTs(val,s.start);
+  else s.end=timeToTs(val,s.end);
+  s.dur=Math.max(0,Math.round((s.end-s.start)/1000));
+  renderEditSegs();recalcFromSegs();
+}
+function delSeg(i){if(!confirm('Ștergi acest segment?'))return;state.todaySegments.splice(i,1);recalcFromSegs();renderEditSegs();}
+function addSegManual(){
+  const startStr=document.getElementById('edit-start').value;
+  const stopStr=document.getElementById('edit-stop').value;
+  const type=document.getElementById('edit-type').value;
+  if(!startStr||!stopStr)return;
+  const st=timeToTs(startStr),en=timeToTs(stopStr);
+  if(en<=st){alert('Ora stop trebuie să fie după start.');return;}
+  state.todaySegments.push({type,start:st,end:en,dur:Math.round((en-st)/1000)});
+  state.todaySegments.sort((a,b)=>a.start-b.start);
+  recalcFromSegs();renderEditSegs();
+}
+function recalcFromSegs(){
+  const tots={condus:0,pauza:0,odihna:0,disponibil:0,descarcare:0,incarcare:0,alimentare:0,servicii:0};
+  state.todaySegments.forEach(s=>{if(tots[s.type]!==undefined)tots[s.type]+=s.dur;});
+  state.totals=tots;saveState();updateAll();
+}
+
+// ============================================================
+// ISTORIC
+// ============================================================
+function renderIstoric(){
+  const wrap=document.getElementById('istoric-wrap');
+  const days=getAllDays();
+  if(!days.length){wrap.innerHTML='<div style="text-align:center;padding:38px 18px;color:var(--text-muted);"><div style="font-size:30px;margin-bottom:7px;">📋</div><div>Nu există înregistrări salvate.</div></div>';return;}
+  wrap.innerHTML=days.map(day=>{
+    const t=day.totals||{},pauze=t.pauza||0,lucrat=PLATIT.reduce((s,k)=>s+(t[k]||0),0),platit=Math.max(0,lucrat-pauze);
+    const eur=((platit/3600)*(profile.tarif||0)).toFixed(2);
+    const tAlim=(day.alimentari||[]).reduce((s,a)=>s+a.litri,0);
+    const segs=(day.todaySegments||[]).map(s=>`
+      <div class="seg"><div class="seg-ico">${ICON[s.type]||'•'}</div>
+      <div style="flex:1;"><div style="font-size:13px;">${LABEL[s.type]||s.type}${s.recovered?' ↩️':s.auto?' 🤖':''}</div>
+      <div style="font-size:11px;color:var(--text-muted);">${fmtTime(s.start)} → ${fmtTime(s.end)}</div></div>
+      <div class="seg-dur">${secToHM(s.dur)}</div></div>`).join('');
+    return`<div class="day-card">
+      <div class="day-hdr">
+        <div><div style="font-weight:600;font-size:13px;">${fmtDate(day.date+'T12:00:00')}</div>${day.masina||profile.masina?`<div style="font-size:11px;color:var(--accent);">🚛 ${day.masina||profile.masina}</div>`:''}</div>
+        <div style="text-align:right;">
+          <div style="font-size:11px;color:var(--text-muted);">🛣️ ${((day.kmGPS||0)+(day.kmManual||0)).toFixed(1)} km</div>
+          <div style="font-size:11px;color:var(--green);">💶 ${eur}€ · ${secToHM(platit)}h</div>
+          ${tAlim>0?`<div style="font-size:11px;color:var(--teal);">⛽ ${tAlim.toFixed(1)} L</div>`:''}
+        </div>
+      </div>
+      <div class="day-body">${segs||'<div style="color:var(--text-muted);font-size:12px;">Nicio înregistrare</div>'}
+        ${day.nota?`<div style="margin-top:7px;padding:7px;background:var(--surface2);border-radius:6px;font-size:12px;color:var(--text-muted);"><strong>Notă:</strong> ${day.nota}</div>`:''}
+      </div></div>`;
+  }).join('');
+}
+
+// ============================================================
+// EXPORT
+// ============================================================
+function getWeekNr(d){
+  const dt=new Date(d);dt.setHours(0,0,0,0);dt.setDate(dt.getDate()+3-(dt.getDay()+6)%7);
+  const w1=new Date(dt.getFullYear(),0,4);
+  return 1+Math.round(((dt-w1)/86400000-3+(w1.getDay()+6)%7)/7);
+}
+function getWeekDates(w,y){
+  const s=new Date(y,0,1+(w-1)*7);const dw=s.getDay();
+  if(dw<=4)s.setDate(s.getDate()-s.getDay()+1);else s.setDate(s.getDate()+8-s.getDay());
+  const e=new Date(s);e.setDate(s.getDate()+6);return{s,e};
+}
+function filterDays(fn){return getAllDays().filter(d=>fn(new Date(d.date+'T12:00:00')));}
+function calcR(days){
+  const tots={condus:0,pauza:0,odihna:0,disponibil:0,descarcare:0,incarcare:0,alimentare:0,servicii:0};
+  let km=0,litri=0,ron=0;
+  days.forEach(d=>{
+    const t=d.totals||{};Object.keys(tots).forEach(k=>{tots[k]+=(t[k]||0);});
+    km+=((d.kmGPS||0)+(d.kmManual||0));
+    litri+=(d.alimentari||[]).reduce((s,a)=>s+a.litri,0);
+    ron+=(d.alimentari||[]).reduce((s,a)=>s+(a.litri*a.pret),0);
+  });
+  const pauze=tots.pauza||0,lucrat=PLATIT.reduce((s,k)=>s+(tots[k]||0),0),platit=Math.max(0,lucrat-pauze);
+  return{tots,km,litri,ron,platit,eur:((platit/3600)*(profile.tarif||0)).toFixed(2),lucrat,pauze,zile:days.length};
+}
+
+function renderExportPreview(){
+  const now=new Date();
+  document.getElementById('exp-w-nr').value=getWeekNr(now);
+  document.getElementById('exp-w-an').value=now.getFullYear();
+  document.getElementById('exp-m-luna').value=now.getMonth()+1;
+  document.getElementById('exp-m-an').value=now.getFullYear();
+  document.getElementById('exp-a-an').value=now.getFullYear();
+  // preview zi
+  const t=liveTots(),pauze=t.pauza||0,lucrat=oreLucrate(t),platit=Math.max(0,lucrat-pauze);
+  document.getElementById('exp-azi-preview').innerHTML=
+    `<div class="info-row"><span class="info-lbl">Dată</span><span>${fmtDate(state.date+'T12:00:00')}</span></div>
+     <div class="info-row"><span class="info-lbl">🚛 Condus</span><span>${secToHMS(t.condus||0)}</span></div>
+     <div class="info-row"><span class="info-lbl">☕ Pauze</span><span>${secToHMS(pauze)}</span></div>
+     <div class="info-row"><span class="info-lbl">✅ Ore plătite</span><span style="color:var(--green);font-weight:700;">${secToHM(platit)}h</span></div>
+     <div class="info-row"><span class="info-lbl">💶 Salariu</span><span style="color:var(--green);font-weight:700;">€ ${((platit/3600)*(profile.tarif||0)).toFixed(2)}</span></div>
+     <div class="info-row"><span class="info-lbl">🛣️ Km</span><span>${((state.kmGPS||0)+(state.kmManual||0)).toFixed(1)} km</span></div>`;
+  prevW();prevM();prevA();
+}
+
+function prevW(){
+  const w=parseInt(document.getElementById('exp-w-nr').value)||getWeekNr(new Date());
+  const y=parseInt(document.getElementById('exp-w-an').value)||new Date().getFullYear();
+  const{s,e}=getWeekDates(w,y);
+  const days=filterDays(d=>d>=s&&d<=e);
+  const r=calcR(days);
+  document.getElementById('exp-w-prev').innerHTML=
+    `Săpt. ${w}/${y} (${s.toLocaleDateString('ro-RO')} — ${e.toLocaleDateString('ro-RO')}): `+
+    `<strong style="color:var(--accent);">${days.length} zile</strong> | `+
+    `<strong style="color:var(--green);">€${r.eur}</strong> | ${r.km.toFixed(1)} km`;
+}
+function prevM(){
+  const m=parseInt(document.getElementById('exp-m-luna').value);
+  const y=parseInt(document.getElementById('exp-m-an').value)||new Date().getFullYear();
+  const days=filterDays(d=>d.getMonth()+1===m&&d.getFullYear()===y);
+  const r=calcR(days);
+  document.getElementById('exp-m-prev').innerHTML=
+    `${LUNI[m]} ${y}: <strong style="color:var(--accent);">${days.length} zile</strong> | `+
+    `<strong style="color:var(--green);">€${r.eur}</strong> | ${r.km.toFixed(1)} km`;
+}
+function prevA(){
+  const y=parseInt(document.getElementById('exp-a-an').value)||new Date().getFullYear();
+  const days=filterDays(d=>d.getFullYear()===y);
+  const r=calcR(days);
+  document.getElementById('exp-a-prev').innerHTML=
+    `Anul ${y}: <strong style="color:var(--accent);">${days.length} zile</strong> | `+
+    `<strong style="color:var(--green);">€${r.eur}</strong> | ${r.km.toFixed(1)} km`;
+}
+
+function buildReport(days,titlu){
+  const lang=LANG;
+  const r=calcR(days);
+  const sumBox=`<div style="background:#0d1117;color:#fff;padding:16px;border-radius:8px;margin-bottom:20px;">
+    <div style="font-size:16px;font-weight:700;color:#f0a500;margin-bottom:12px;">📊 ${tr('totalSummary')} — ${titlu}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+      ${Object.entries(r.tots).filter(([k])=>LABEL[k]).map(([k,v])=>`<div style="background:rgba(255,255,255,.08);border-radius:6px;padding:7px 11px;text-align:center;min-width:80px;">
+        <div style="font-size:19px;font-weight:700;color:#fff;">${secToHM(v||0)}</div>
+        <div style="font-size:10px;color:#8b949e;">${ICON[k]||''} ${LABEL[k]||k}</div>
+      </div>`).join('')}
+    </div>
+    <div style="border-top:1px solid rgba(255,255,255,.1);padding-top:12px;display:flex;flex-wrap:wrap;gap:14px;font-size:13px;">
+      <span>✅ ${tr('paidHours')}: <b style="color:#2ea043;">${secToHM(r.platit)}</b></span>
+      <span>💶 ${tr('salary')}: <b style="color:#2ea043;">€${r.eur}</b></span>
+      <span>🛣️ ${tr('kmTotal')}: <b style="color:#f0a500;">${r.km.toFixed(1)}</b></span>
+      <span>⛽ ${r.litri.toFixed(1)} L / ${r.ron.toFixed(2)} RON</span>
+      <span>📅 ${tr('workedDays')}: ${r.zile}</span>
+      <span>💰 ${tr('rate')}: ${(profile.tarif||0).toFixed(2)} €/h</span>
+    </div>
+  </div>`;
+  const rows=days.map(day=>{
+    const t=day.totals||{},pauze=t.pauza||0,lucrat=PLATIT.reduce((s,k)=>s+(t[k]||0),0),platit=Math.max(0,lucrat-pauze);
+    const eur=((platit/3600)*(profile.tarif||0)).toFixed(2);
+    const segs=(day.todaySegments||[]).map(s=>`<tr><td style="padding:3px 8px;">${ICON[s.type]||''} ${trAct(s.type)||s.type}${s.auto?' (auto)':''}</td><td style="text-align:center;padding:3px 8px;">${fmtTime(s.start)}</td><td style="text-align:center;padding:3px 8px;">${fmtTime(s.end)}</td><td style="text-align:center;padding:3px 8px;">${secToHM(s.dur)}</td></tr>`).join('');
+    const alimR=(day.alimentari||[]).map(a=>`<tr><td>⛽</td><td>${fmtTime(a.ts)}</td><td>${a.statie||'—'}</td><td>${a.litri} L${a.pret?' / '+(a.litri*a.pret).toFixed(2)+' RON':''}</td></tr>`).join('');
+    return`<div style="page-break-inside:avoid;margin-bottom:20px;border:1px solid #ccc;border-radius:8px;overflow:hidden;">
+      <div style="background:#0d1117;color:#f0a500;padding:9px 14px;font-weight:700;font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
+        <span>📅 ${fmtDate(day.date+'T12:00:00')} ${day.masina||profile.masina?'| 🚛 '+(day.masina||profile.masina):''} ${profile.sofer?'| 👤 '+profile.sofer:''}</span>
+        <span style="font-size:11px;color:#2ea043;">💶 ${eur}€ · ${secToHM(platit)}h · 🛣️ ${((day.kmGPS||0)+(day.kmManual||0)).toFixed(1)} km</span>
+      </div>
+      <div style="padding:11px 14px;font-size:12px;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;">
+          <thead><tr style="background:#f5f5f5;">
+            <th style="text-align:left;padding:4px 8px;width:40%;">${tr("activity")}</th>
+            <th style="text-align:center;padding:4px 8px;width:20%;">${tr("start")}</th>
+            <th style="text-align:center;padding:4px 8px;width:20%;">${tr("stop")}</th>
+            <th style="text-align:center;padding:4px 8px;width:20%;">${tr("duration")}</th>
+          </tr></thead>
+          <tbody>${segs||'<tr><td colspan="4" style="color:#999;padding:5px 8px;">—</td></tr>'}</tbody>
+        </table>
+        ${alimR?`<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="background:#f0f9ff;"><th style="text-align:left;padding:3px 7px;">⛽</th><th>Ora</th><th>Stație</th><th>Cant.</th></tr></thead><tbody>${alimR}</tbody></table>`:''}
+        ${day.nota?`<div style="margin-top:6px;padding:6px;background:#fffbeb;border-radius:4px;font-size:11px;"><b>Notă:</b> ${day.nota}</div>`:''}
+      </div></div>`;
+  }).join('');
+  return`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;padding:20px;color:#1f2328;}h1{font-size:18px;}@media print{body{padding:0;}}</style></head><body>
+  <h1>🚛 TahoDrive — ${titlu}</h1>
+  <div style="color:#666;font-size:11px;margin-bottom:16px;">Generat: ${new Date().toLocaleString('ro-RO')} | ${profile.firma||'—'}</div>
+  ${sumBox}${rows}</body></html>`;
+}
+
+// ============================================================
+// EXPORT TRASEU CU HARTĂ
+// ============================================================
+function exportTraseu(){
+  const toate=document.getElementById('exp-traseu-toate').checked;
+  let zile=[];
+  if(toate){
+    zile=getAllDays().filter(d=>d.gpsCoords&&d.gpsCoords.length>1);
+    if(state.gpsCoords&&state.gpsCoords.length>1&&!zile.find(d=>d.date===state.date)){zile.unshift(state);}
+  } else {
+    if(!state.gpsCoords||state.gpsCoords.length<2){
+      alert(LANG==='ro'?'Nu există traseu GPS pentru ziua curentă.':'No GPS track for today.');return;
+    }
+    zile=[state];
+  }
+  if(!zile.length){alert(LANG==='ro'?'Nu există trasee GPS de exportat.':'No GPS tracks to export.');return;}
+
+  const rows=zile.map(day=>{
+    const pts=(day.gpsCoords||[]);
+    const ptsJson=JSON.stringify(pts.map(p=>([p.lat,p.lng])));
+    const km=((day.kmGPS||0)+(day.kmManual||0)).toFixed(1);
+    return `<div style="margin-bottom:30px;">
+      <h3 style="color:#f0a500;margin-bottom:8px;">📅 ${fmtDate(day.date+'T12:00:00')} — 🛣️ ${km} km — ${pts.length} puncte GPS</h3>
+      <div id="map_${day.date}" style="height:400px;border-radius:8px;border:1px solid #ccc;"></div>
+      <script>
+        (function(){
+          var pts=${ptsJson};
+          if(!pts||pts.length<2){document.getElementById('map_${day.date}').innerHTML='<div style=padding:20px;color:#999;>Fără date GPS</div>';return;}
+          var m=L.map('map_${day.date}');
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(m);
+          var line=L.polyline(pts,{color:'#f0a500',weight:4}).addTo(m);
+          L.marker(pts[0],{icon:L.divIcon({html:'<div style="width:12px;height:12px;background:#2ea043;border:2px solid #fff;border-radius:50%;"></div>',iconSize:[12,12],iconAnchor:[6,6],className:''})}).addTo(m).bindPopup('Start');
+          L.marker(pts[pts.length-1],{icon:L.divIcon({html:'<div style="width:12px;height:12px;background:#da3633;border:2px solid #fff;border-radius:50%;"></div>',iconSize:[12,12],iconAnchor:[6,6],className:''})}).addTo(m).bindPopup('Final');
+          m.fitBounds(line.getBounds(),{padding:[20,20]});
+        })();
+      <\/script>
+    </div>`;
+  }).join('');
+
+  const html2=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>
+  <style>body{font-family:Arial,sans-serif;padding:20px;background:#0d1117;color:#e6edf3;}h1{color:#f0a500;}h3{color:#f0a500;}</style>
+  </head><body>
+  <h1>🗺️ TahoDrive — ${LANG==='ro'?'Trasee GPS':'GPS Tracks'}</h1>
+  <p style="color:#8b949e;font-size:12px;">${LANG==='ro'?'Generat':'Generated'}: ${new Date().toLocaleString('ro-RO')} | ${profile.sofer||''} | ${profile.firma||''} | ${profile.masina||''}</p>
+  ${rows}
+  </body></html>`;
+  
+  dlHTML(html2,'tahodrive_traseu_'+state.date+'.html');
+  document.getElementById('exp-traseu-status').textContent=LANG==='ro'?'✅ Traseu exportat!':'✅ Track exported!';
+  setTimeout(()=>document.getElementById('exp-traseu-status').textContent='',4000);
+}
+
+function dlHTML(content,filename){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([content],{type:'text/html'}));
+  a.download=filename;a.click();URL.revokeObjectURL(a.href);
+}
+
+function exportZi(){dlHTML(buildReport([state],fmtDate(state.date+'T12:00:00')),'tahograf_'+state.date+'.html');}
+function exportSapt(){
+  const w=parseInt(document.getElementById('exp-w-nr').value)||getWeekNr(new Date());
+  const y=parseInt(document.getElementById('exp-w-an').value)||new Date().getFullYear();
+  const{s,e}=getWeekDates(w,y);
+  const days=filterDays(d=>d>=s&&d<=e);
+  if(!days.length){alert('Nu există date pentru săptămâna '+w+'/'+y+'.');return;}
+  dlHTML(buildReport(days,'Săptămâna '+w+'/'+y),'tahograf_sapt'+w+'_'+y+'.html');
+}
+function exportLuna(){
+  const m=parseInt(document.getElementById('exp-m-luna').value);
+  const y=parseInt(document.getElementById('exp-m-an').value)||new Date().getFullYear();
+  const days=filterDays(d=>d.getMonth()+1===m&&d.getFullYear()===y);
+  if(!days.length){alert('Nu există date pentru '+LUNI[m]+' '+y+'.');return;}
+  dlHTML(buildReport(days,LUNI[m]+' '+y),'tahograf_'+LUNI[m].toLowerCase()+'_'+y+'.html');
+}
+function exportAn(){
+  const y=parseInt(document.getElementById('exp-a-an').value)||new Date().getFullYear();
+  const days=filterDays(d=>d.getFullYear()===y);
+  if(!days.length){alert('Nu există date pentru anul '+y+'.');return;}
+  dlHTML(buildReport(days,'Anul '+y),'tahograf_an_'+y+'.html');
+}
+
+// ============================================================
+// DATE
+// ============================================================
+function updateDate(){document.getElementById('hdr-date').textContent=new Date().toLocaleDateString('ro-RO',{weekday:'short',day:'2-digit',month:'short'});}
+
+// ============================================================
+// SERVICE WORKER
+// ============================================================
+async function registerSW(){
+  if(!('serviceWorker' in navigator))return;
+  try{await navigator.serviceWorker.register('sw.js');}catch(e){}
+}
+
+// ============================================================
+// INIT
+// ============================================================
+async function init(){
+  loadProfile();loadState();
+  updateDate();updateHeader();updateAll();
+  updateKmDisplay();renderAlim();loadNota();
+  initMap();
+  if(state.gpsCoords&&state.gpsCoords.length>1)drawTrack();
+  startTick();
+  await registerSW();
+  setTimeout(checkZileLibere,2000);
+  // recuperare la start
+  if(state.currentActivity&&state._lastSave){
+    const gap=Math.round((Date.now()-state._lastSave)/1000);
+    if(gap>10&&gap<86400){
+      state.totals[state.currentActivity]=(state.totals[state.currentActivity]||0)+gap;
+      state.todaySegments.push({type:state.currentActivity,start:state._lastSave,end:Date.now(),dur:gap,recovered:true});
+      state.actStart=Date.now();state._lastSave=Date.now();
+      saveState();
+      const h=Math.floor(gap/3600),m=Math.floor((gap%3600)/60),s=gap%60;
+      const ds=h>0?h+'h '+pad(m)+'min':m>0?m+'min '+s+'s':s+'s';
+      document.getElementById('recovery-text').textContent=ICON[state.currentActivity]+' Recuperat '+ds+' de '+LABEL[state.currentActivity].toLowerCase();
+      document.getElementById('recovery-banner').classList.add('show');
+    }
+  }
+}
+window.addEventListener('load',init);
+window.addEventListener('resize',()=>{if(leafletMap)leafletMap.invalidateSize();});
+</script>
+</body>
+</html>

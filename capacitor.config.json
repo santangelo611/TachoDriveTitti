@@ -1,0 +1,13 @@
+{
+  "appId": "ro.tahodrive.jurnal",
+  "appName": "TahoDrive",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "Geolocation": {
+      "permissions": ["location", "coarseLocation"]
+    }
+  }
+}
