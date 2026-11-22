@@ -1,0 +1,52 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Set permissions for Gradle
+        run: chmod +x android/gradlew
+
+      - name: Add background location permission
+        run: |
+          sed -i 's|</manifest>|<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>\n<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n</manifest>|' android/app/src/main/AndroidManifest.xml
+
+      - name: Build APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TahoDrive-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
