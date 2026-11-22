@@ -1272,10 +1272,7 @@ function exportBackup(){
     }catch(e){}
   }
   backup.days.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}));
-  a.download='tahodrive_backup_'+new Date().toISOString().slice(0,10)+'.json';
-  a.click();URL.revokeObjectURL(a.href);
+  saveFile(JSON.stringify(backup,null,2),'tahodrive_backup_'+new Date().toISOString().slice(0,10)+'.json');
   document.getElementById('backup-status').textContent='✅ Backup exportat: '+backup.days.length+' zile.';
   setTimeout(()=>document.getElementById('backup-status').textContent='',5000);
 }
@@ -1590,12 +1587,24 @@ function exportTraseu(){
   document.getElementById('exp-traseu-status').textContent=LANG==='ro'?'✅ Traseu exportat!':'✅ Track exported!';
   setTimeout(()=>document.getElementById('exp-traseu-status').textContent='',4000);
 }
-
-function dlHTML(content,filename){
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([content],{type:'text/html'}));
-  a.download=filename;a.click();URL.revokeObjectURL(a.href);
+async function saveFile(content,filename){
+  const cap=window.Capacitor;
+  if(cap&&cap.isNativePlatform&&cap.isNativePlatform()){
+    try{
+      const{Filesystem,Share}=cap.Plugins;
+      const res=await Filesystem.writeFile({path:filename,data:content,directory:'CACHE',encoding:'utf8'});
+      await Share.share({title:filename,url:res.uri,dialogTitle:'Salvează / Trimite'});
+    }catch(e){
+      if(!String(e.message||e).toLowerCase().includes('cancel'))alert('Eroare export: '+(e.message||e));
+    }
+  }else{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([content]));
+    a.download=filename;a.click();URL.revokeObjectURL(a.href);
+  }
 }
+function dlHTML(content,filename){saveFile(content,filename);}
+
 
 function exportZi(){dlHTML(buildReport([state],fmtDate(state.date+'T12:00:00')),'tahograf_'+state.date+'.html');}
 function exportSapt(){
