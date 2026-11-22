@@ -13,29 +13,40 @@
 // Capacitor GPS wrapper — funcționează în APK și în browser
 const CapGPS = {
   async startWatch(callback, errorCallback, options) {
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
-      // Mod nativ APK — folosim Capacitor Geolocation
+    const cap = window.Capacitor;
+    if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
       try {
-        const { Geolocation } = window.Capacitor.Plugins;
-        await Geolocation.requestPermissions({ permissions: ['location'] });
-        const id = await Geolocation.watchPosition(
-          { enableHighAccuracy: true, timeout: 30000 },
-          (pos, err) => {
-            if (err) { errorCallback && errorCallback(err); return; }
+        const BG = cap.Plugins.BackgroundGeolocation;
+        const id = await BG.addWatcher(
+          {
+            backgroundMessage: 'TahoDrive înregistrează traseul',
+            backgroundTitle: 'Înregistrare activă',
+            requestPermissions: true,
+            stale: false,
+            distanceFilter: 10
+          },
+          (location, error) => {
+            if (error) {
+              if (error.code === 'NOT_AUTHORIZED') {
+                alert('Permite locația „Tot timpul" pentru TahoDrive în Setări.');
+                BG.openSettings();
+              }
+              errorCallback && errorCallback(error);
+              return;
+            }
             callback({
               coords: {
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-                accuracy: pos.coords.accuracy,
-                speed: pos.coords.speed
+                latitude: location.latitude,
+                longitude: location.longitude,
+                accuracy: location.accuracy,
+                speed: location.speed
               }
             });
           }
         );
         return { type: 'capacitor', id };
-      } catch(e) { errorCallback && errorCallback(e); }
+      } catch (e) { errorCallback && errorCallback(e); }
     } else {
-      // Mod browser — folosim navigator.geolocation
       if (!navigator.geolocation) { errorCallback && errorCallback(new Error('GPS indisponibil')); return; }
       const id = navigator.geolocation.watchPosition(callback, errorCallback, options);
       return { type: 'browser', id };
@@ -44,7 +55,7 @@ const CapGPS = {
   clearWatch(watch) {
     if (!watch) return;
     if (watch.type === 'capacitor') {
-      try { const { Geolocation } = window.Capacitor.Plugins; Geolocation.clearWatch({ id: watch.id }); } catch(e) {}
+      try { window.Capacitor.Plugins.BackgroundGeolocation.removeWatcher({ id: watch.id }); } catch (e) {}
     } else {
       navigator.geolocation.clearWatch(watch.id);
     }
@@ -227,7 +238,7 @@ select.inp{cursor:pointer;}
   <div class="logo">
     <div class="logo-icon">🚛</div>
     <div>
-      <div class="logo-text">TahoDrive</div>
+      <div class="logo-text">TahoDrive v3.2</div>
       <div class="logo-sub" id="hdr-date">—</div>
     </div>
   </div>
@@ -974,7 +985,7 @@ function initMap(){
 function toggleGPS(){if(gpsActive)stopGPS();else startGPS();}
 
 function startGPS(){
-  if(!navigator.geolocation){document.getElementById('gps-status').textContent='GPS indisponibil.';return;}
+   if(!navigator.geolocation&&!(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform())){document.getElementById('gps-status').textContent='GPS indisponibil.';return;}
   gpsActive=true;
   document.getElementById('gps-dot').classList.add('on');
   document.getElementById('btn-gps').textContent='⏹ Oprește GPS';
