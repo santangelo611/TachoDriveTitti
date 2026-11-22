@@ -39,10 +39,6 @@ jobs:
         run: |
           sed -i 's|</manifest>|<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\n<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>\n<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n<uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>\n<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n</manifest>|' android/app/src/main/AndroidManifest.xml
 
-      - name: Add background service to manifest
-        run: |
-          sed -i 's|</application>|<service android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService" android:enabled="true" android:exported="false" android:foregroundServiceType="location" />\n</application>|' android/app/src/main/AndroidManifest.xml
-
       - name: Build APK
         run: |
           cd android
